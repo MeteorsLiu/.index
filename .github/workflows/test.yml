@@ -1,81 +1,17 @@
-name: Test formulas
+name: Diagnose zlib arm64
 
 on:
   push:
-  pull_request:
+    branches:
+      - codex/diagnose-zlib-arm64
 
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  changes:
-    name: Find changed modules
-    runs-on: ubuntu-latest
-    outputs:
-      modules: ${{ steps.modules.outputs.modules }}
-      has_modules: ${{ steps.modules.outputs.has_modules }}
-
-    steps:
-      - name: Check out formulas
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: 1.25.0
-          cache: false
-
-      - name: Find changed modules
-        id: modules
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          go install -tags=linknamefix -ldflags="-checklinkname=0" github.com/goplus/ixgo/cmd/ixgo@latest
-          "$(go env GOPATH)/bin/ixgo" run .github/scripts/find_changed_modules.gsh
-
   test:
-    name: ${{ matrix.module }} (${{ matrix.goos }}-${{ matrix.goarch }})
-    needs: changes
-    if: needs.changes.outputs.has_modules == 'true'
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      # TODO: Expand this matrix with every formula option combination after
-      # `llar test` can enumerate options instead of testing defaults only.
-      matrix:
-        module: ${{ fromJSON(needs.changes.outputs.modules) }}
-        platform:
-          - linux-amd64
-          - linux-arm64
-          - darwin-amd64
-          - darwin-arm64
-        include:
-          - platform: linux-amd64
-            runner: ubuntu-latest
-            goos: linux
-            goarch: amd64
-          - platform: linux-arm64
-            runner: ubuntu-24.04-arm
-            goos: linux
-            goarch: arm64
-          - platform: darwin-amd64
-            runner: macos-15-intel
-            goos: darwin
-            goarch: amd64
-          - platform: darwin-arm64
-            runner: macos-latest
-            goos: darwin
-            goarch: arm64
+    name: zlib (linux-arm64)
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Check out formulas
@@ -85,7 +21,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: goplus/llar
-          ref: main
+          ref: 36ba7c64a7ccbb67e37731e34d828360650c65f6
           path: .llar-source
 
       - name: Install Linux build dependencies
@@ -123,8 +59,8 @@ jobs:
       - name: Verify runner platform
         shell: bash
         run: |
-          test "$(go env GOOS)" = "${{ matrix.goos }}"
-          test "$(go env GOARCH)" = "${{ matrix.goarch }}"
+          test "$(go env GOOS)" = "linux"
+          test "$(go env GOARCH)" = "arm64"
 
       - name: Install llar
         working-directory: .llar-source
@@ -132,7 +68,57 @@ jobs:
           go install -ldflags="-checklinkname=0" ./cmd/llar
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Inspect zlib cache before test
+        shell: bash
+        run: |
+          cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/.llar/workspaces"
+          archive="$cache_root/madler/zlib@v1.3.2-arm64-linux/lib/libz.a"
+          metadata="$cache_root/madler/zlib/.cache.json"
+          if [[ -f "$metadata" ]]; then
+            printf "Cache index exists before test:\n"
+            sed -n '1,160p' "$metadata"
+          else
+            printf "No zlib cache index before test\n"
+          fi
+          if [[ -f "$archive" ]]; then
+            printf "Archive exists before test:\n"
+            sha256sum "$archive"
+            llvm-readobj --file-headers "$archive" | sed -n '1,42p'
+          else
+            printf "No zlib archive before test\n"
+          fi
+
       # TODO: Add version-range support to `llar test`.
       # For example, test a changed formula from `fromVer "1.0.0"` instead of the latest source tag.
       - name: Test module
-        run: llar test --verbose "./${{ matrix.module }}" --os "${{ matrix.goos }}" --arch "${{ matrix.goarch }}"
+        run: llar test --verbose "./zlib" --os "linux" --arch "arm64"
+
+      - name: Inspect installed zlib and published artifacts
+        if: always()
+        shell: bash
+        run: |
+          cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/.llar/workspaces"
+          archive="$cache_root/madler/zlib@v1.3.2-arm64-linux/lib/libz.a"
+          metadata="$cache_root/madler/zlib/.cache.json"
+          printf "Runner architecture: "; uname -m
+          printf "Installed archive:\n"
+          file "$archive"
+          sha256sum "$archive"
+          llvm-readobj --file-headers "$archive" | sed -n '1,42p'
+          printf "Installed zlib header version:\n"
+          grep '^#define ZLIB_VERSION' "$cache_root/madler/zlib@v1.3.2-arm64-linux/include/zlib.h"
+          printf "Cache index after test:\n"
+          if [[ -f "$metadata" ]]; then
+            sed -n '1,160p' "$metadata"
+          fi
+          printf "Published archive comparison:\n"
+          for platform in arm64-linux amd64-linux; do
+            download="$RUNNER_TEMP/zlib-$platform.tar.gz"
+            status="$(curl --silent --show-error --location --max-time 30 --max-filesize 2097152 \
+              --output "$download" --write-out '%{http_code}' \
+              "https://llarpackages.xgo.dev/madler/zlib/v1.3.2/$platform.tar.gz")"
+            printf "%s HTTP %s\n" "$platform" "$status"
+            if [[ "$status" == "200" ]]; then
+              tar -xOzf "$download" lib/libz.a | sha256sum
+            fi
+          done
