@@ -28,7 +28,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y autoconf automake build-essential ca-certificates cmake curl gperf groff patch
+          sudo apt-get install -y autoconf automake build-essential ca-certificates cmake curl gperf groff patch strace
 
       - name: Install LLVM 19 on Linux
         if: runner.os == 'Linux'
@@ -71,6 +71,8 @@ jobs:
       - name: Inspect zlib cache before test
         shell: bash
         run: |
+          type -a llar
+          go version -m "$(command -v llar)"
           cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/.llar/workspaces"
           archive="$cache_root/madler/zlib@v1.3.2-arm64-linux/lib/libz.a"
           metadata="$cache_root/madler/zlib/.cache.json"
@@ -91,12 +93,14 @@ jobs:
       # TODO: Add version-range support to `llar test`.
       # For example, test a changed formula from `fromVer "1.0.0"` instead of the latest source tag.
       - name: Test module
-        run: llar test --verbose "./zlib" --os "linux" --arch "arm64"
+        run: strace -f -e trace=execve,openat -o "$RUNNER_TEMP/zlib.strace" llar test --verbose "./zlib" --os "linux" --arch "arm64"
 
       - name: Inspect installed zlib and published artifacts
         if: always()
         shell: bash
         run: |
+          printf "LLAR execution and zlib cache access:\n"
+          grep -E 'execve.*(llar|configure|make|/cc"|gcc|clang)|openat.*madler/zlib' "$RUNNER_TEMP/zlib.strace" | sed -n '1,120p'
           cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/.llar/workspaces"
           archive="$cache_root/madler/zlib@v1.3.2-arm64-linux/lib/libz.a"
           metadata="$cache_root/madler/zlib/.cache.json"
