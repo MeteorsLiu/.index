@@ -166,16 +166,47 @@ jobs:
           go-version-file: .llcppg-source/go.mod
           cache: false
 
-      - name: Install LLGo and LLVM for llcppg
-        working-directory: .llcppg-source
+      - name: Install LLVM 21 and LLGo dependencies on Linux
+        if: runner.os == 'Linux'
+        run: |
+          echo "deb [signed-by=/usr/share/keyrings/apt.llvm.org.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm21.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            llvm-21-dev clang-21 libclang-21-dev lld-21 libunwind-21-dev libc++-21-dev \
+            pkg-config libgc-dev libssl-dev zlib1g-dev libffi-dev libuv1-dev
+          echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+
+      - name: Install LLVM 21 and LLGo dependencies on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@21 lld@21 bdw-gc openssl libffi libuv pkg-config
+          echo "$(brew --prefix llvm@21)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix lld@21)/bin" >> "$GITHUB_PATH"
+
+      - name: Check out LLGo
+        uses: actions/checkout@v7
+        with:
+          repository: xgo-dev/llgo
+          ref: afe9a5407260348b18c7104e98d76cb5cdf48b29
+          path: .llgo-source
+          persist-credentials: false
+
+      - name: Build LLGo with LLVM 21
+        working-directory: .llgo-source
         shell: bash
         env:
-          LLVM_VERSION: '19'
-          LLGO_REF: afe9a5407260348b18c7104e98d76cb5cdf48b29
-          LLGO_SRC: ${{ runner.temp }}/llcppg-llgo
-          LLGO_BIN_DIR: ${{ runner.temp }}/llcppg-bin
-          GO_ROOT: ${{ runner.temp }}/llcppg-go
-        run: .github/scripts/install-llgo.sh
+          GOBIN: ${{ runner.temp }}/llcppg-bin
+          GOFLAGS: -tags=dev,byollvm,llvm21
+          GOTOOLCHAIN: local
+        run: |
+          llvm-config --version
+          export CGO_CPPFLAGS="$(llvm-config --cppflags)"
+          export CGO_CXXFLAGS="$(llvm-config --cxxflags)"
+          export CGO_LDFLAGS="$(llvm-config --ldflags --libs --system-libs)"
+          ./install.sh
+          "$GOBIN/llgo" version
+          echo "$GOBIN" >> "$GITHUB_PATH"
 
       - name: Build llcppg
         working-directory: .llcppg-source
