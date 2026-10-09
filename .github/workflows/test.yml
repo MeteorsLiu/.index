@@ -62,6 +62,10 @@ jobs:
           test "$(go env GOOS)" = "linux"
           test "$(go env GOARCH)" = "arm64"
 
+      - name: Apply cache request diagnostics
+        working-directory: .llar-source
+        run: git apply --unidiff-zero "$GITHUB_WORKSPACE/.github/diagnostics/kodo-request.patch"
+
       - name: Install llar
         working-directory: .llar-source
         run: |
