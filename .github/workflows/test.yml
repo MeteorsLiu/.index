@@ -136,3 +136,55 @@ jobs:
       # For example, test a changed formula from `fromVer "1.0.0"` instead of the latest source tag.
       - name: Test module
         run: llar test --verbose "./${{ matrix.module }}" --os "${{ matrix.goos }}" --arch "${{ matrix.goarch }}"
+
+      - name: Prepare llcppg input
+        shell: bash
+        env:
+          PROJECT: ${{ matrix.module }}
+          TARGET_OS: ${{ matrix.goos }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+        run: |
+          input_dir="$RUNNER_TEMP/llcppg/source"
+          mkdir -p "$input_dir/include"
+          # Keep this checkout's local Formula overlay; llar install uses LLAR Cloud.
+          llar make --json "./$PROJECT" --os "$TARGET_OS" --arch "$TARGET_ARCH" > "$RUNNER_TEMP/llcppg/install.json"
+          install_dir="$(jq -r '.dir' "$RUNNER_TEMP/llcppg/install.json")"
+          cp -R "$GITHUB_WORKSPACE/$PROJECT/." "$input_dir/"
+          cp -R "$install_dir/include/." "$input_dir/include/"
+
+      - name: Check out llcppg
+        uses: actions/checkout@v7
+        with:
+          repository: goplus/llcppg
+          ref: 8fc0f987e41ffe4b4f608e9541422b460ea89fea
+          path: .llcppg-source
+          persist-credentials: false
+
+      - name: Set up Go for llcppg
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: .llcppg-source/go.mod
+          cache: false
+
+      - name: Install LLGo and LLVM for llcppg
+        working-directory: .llcppg-source
+        shell: bash
+        env:
+          LLVM_VERSION: '19'
+          LLGO_REF: afe9a5407260348b18c7104e98d76cb5cdf48b29
+          LLGO_SRC: ${{ runner.temp }}/llcppg-llgo
+          LLGO_BIN_DIR: ${{ runner.temp }}/llcppg-bin
+          GO_ROOT: ${{ runner.temp }}/llcppg-go
+        run: .github/scripts/install-llgo.sh
+
+      - name: Build llcppg
+        working-directory: .llcppg-source
+        run: llgo build -o "$RUNNER_TEMP/llcppg-bin/llcppg" ./cmd/llcppg
+
+      - name: Test llcppg generation
+        shell: bash
+        working-directory: ${{ runner.temp }}/llcppg/source
+        run: |
+          go mod download
+          llcppg -v "$RUNNER_TEMP/llcppg/generated" "$PWD"
+          ls "$RUNNER_TEMP/llcppg/generated"/*.go
