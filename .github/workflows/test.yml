@@ -215,7 +215,11 @@ jobs:
       - name: Test llcppg generation
         shell: bash
         working-directory: ${{ runner.temp }}/llcppg/source
+        env:
+          PROJECT: ${{ matrix.module }}
         run: |
-          go mod download
+          go mod init "github.com/llarhub/$PROJECT/c"
+          go mod edit -go=1.23 -require=github.com/goplus/lib@v0.6.1
+          go mod download github.com/goplus/lib@v0.6.1
           llcppg -v "$RUNNER_TEMP/llcppg/generated" "$PWD"
           ls "$RUNNER_TEMP/llcppg/generated"/*.go
